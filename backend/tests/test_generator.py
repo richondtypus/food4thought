@@ -1,4 +1,10 @@
-from app.services.generator import MenuContext, build_analysis
+from app.services.generator import (
+    CandidateDish,
+    MenuContext,
+    build_analysis,
+    dedupe_candidates,
+    limited_combinations,
+)
 
 
 def test_build_analysis_generates_dishes() -> None:
@@ -30,3 +36,49 @@ def test_build_analysis_generates_dishes() -> None:
         assert dish.evidence_lines
         assert dish.ingredients_needed == []
         assert set(dish.ingredients_used).issubset(available_set)
+
+
+def test_limited_combinations_prefers_variety() -> None:
+    combos = limited_combinations(
+        ["butternut squash", "eggplant", "tomato", "avocado"],
+        size=2,
+        limit=2,
+    )
+
+    assert combos == [
+        ("butternut squash", "eggplant"),
+        ("tomato", "avocado"),
+    ]
+
+
+def test_dedupe_candidates_collapses_near_duplicate_category_options() -> None:
+    candidates = [
+        CandidateDish(
+            name="Butternut Squash & Avocado Fregola Bowl",
+            category="Bowls",
+            reasoning="",
+            ingredients_used=("fregola", "butternut squash", "avocado", "herbs", "olive oil"),
+            score=100,
+        ),
+        CandidateDish(
+            name="Butternut Squash & Eggplant Fregola Bowl",
+            category="Bowls",
+            reasoning="",
+            ingredients_used=("fregola", "butternut squash", "eggplant", "herbs", "olive oil"),
+            score=98,
+        ),
+        CandidateDish(
+            name="Butternut Squash & Avocado Insalata",
+            category="Salads",
+            reasoning="",
+            ingredients_used=("arugula", "butternut squash", "avocado", "herbs", "olive oil"),
+            score=95,
+        ),
+    ]
+
+    deduped = dedupe_candidates(candidates)
+
+    assert [dish.name for dish in deduped] == [
+        "Butternut Squash & Avocado Fregola Bowl",
+        "Butternut Squash & Avocado Insalata",
+    ]

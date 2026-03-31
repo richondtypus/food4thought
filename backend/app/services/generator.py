@@ -551,6 +551,8 @@ def dedupe_candidates(candidates: list[CandidateDish]) -> list[CandidateDish]:
         key = dish.name.lower()
         if key in seen:
             continue
+        if any(looks_like_same_category_dish(dish, existing) for existing in deduped):
+            continue
         seen.add(key)
         deduped.append(dish)
 
@@ -782,15 +784,56 @@ def unique_preserve_order(values: list[str | None]) -> list[str]:
 
 
 def limited_combinations(items: list[str], size: int, limit: int) -> list[tuple[str, ...]]:
-    combos: list[tuple[str, ...]] = []
-    if len(items) < size:
-        return combos
+    all_combos = list(combinations(items, size))
+    if len(all_combos) <= limit:
+        return all_combos
 
-    for combo in combinations(items, size):
-        combos.append(combo)
-        if len(combos) >= limit:
-            break
-    return combos
+    selected: list[tuple[str, ...]] = []
+    ingredient_use_count: dict[str, int] = {}
+
+    indexed_combos = list(enumerate(all_combos))
+    while indexed_combos and len(selected) < limit:
+        if not selected:
+            _index, combo = indexed_combos.pop(0)
+            selected.append(combo)
+            for ingredient in combo:
+                ingredient_use_count[ingredient] = ingredient_use_count.get(ingredient, 0) + 1
+            continue
+
+        best_position = min(
+            range(len(indexed_combos)),
+            key=lambda position: combination_priority(indexed_combos[position][1], ingredient_use_count, indexed_combos[position][0]),
+        )
+        _index, combo = indexed_combos.pop(best_position)
+        selected.append(combo)
+        for ingredient in combo:
+            ingredient_use_count[ingredient] = ingredient_use_count.get(ingredient, 0) + 1
+
+    return selected
+
+
+def looks_like_same_category_dish(candidate: CandidateDish, existing: CandidateDish) -> bool:
+    if candidate.category != existing.category:
+        return False
+
+    candidate_ingredients = set(candidate.ingredients_used)
+    existing_ingredients = set(existing.ingredients_used)
+    union = candidate_ingredients | existing_ingredients
+    if not union:
+        return False
+
+    overlap_ratio = len(candidate_ingredients & existing_ingredients) / len(union)
+    return overlap_ratio >= 0.6
+
+
+def combination_priority(
+    combo: tuple[str, ...],
+    ingredient_use_count: dict[str, int],
+    original_index: int,
+) -> tuple[int, int, int]:
+    repeated_ingredients = sum(ingredient_use_count.get(ingredient, 0) for ingredient in combo)
+    max_reuse = max((ingredient_use_count.get(ingredient, 0) for ingredient in combo), default=0)
+    return repeated_ingredients, max_reuse, original_index
 
 
 def ingredient_title(ingredient: str) -> str:
