@@ -1,6 +1,6 @@
-# Vegan Menu Generator
+# Vegan Menu Finder
 
-A full-stack app that accepts a restaurant menu PDF, infers the ingredients and style already present in the kitchen, and suggests realistic vegan dishes the restaurant could add.
+A full-stack app that accepts a restaurant menu PDF, infers the ingredients and style already present in the kitchen, and uncovers realistic vegan-friendly dishes a diner could plausibly request from the existing pantry.
 
 ## Stack
 
@@ -11,8 +11,8 @@ A full-stack app that accepts a restaurant menu PDF, infers the ingredients and 
 
 ## Project Structure
 
-- `frontend/` - upload UI and results experience
-- `backend/` - PDF parsing and vegan dish generation API
+- `frontend/` - upload UI and consumer-facing vegan ordering guidance
+- `backend/` - PDF parsing and pantry-native vegan suggestion API
 
 ## Local Development
 

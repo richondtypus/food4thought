@@ -20,10 +20,13 @@ def test_build_analysis_generates_dishes() -> None:
     assert "animal_based" in result.ingredients.model_dump()
     assert any(item in result.ingredients.available for item in ("avocado", "pasta", "cilantro"))
     assert result.ingredients.likely_missing == []
-    assert result.notes == []
+    assert result.notes
     assert len(result.vegan_dishes) >= 5
 
     available_set = set(result.ingredients.available)
     for dish in result.vegan_dishes:
+        assert dish.consumer_confidence
+        assert dish.ordering_tip.startswith('Ask: "')
+        assert dish.evidence_lines
         assert dish.ingredients_needed == []
         assert set(dish.ingredients_used).issubset(available_set)

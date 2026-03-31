@@ -10,6 +10,7 @@ from app.services.menu_parser import (
     infer_animal_ingredients,
     infer_available_ingredients,
     infer_cuisine_signals,
+    phrase_present,
 )
 
 GREENS = {"arugula", "greens", "kale", "spinach", "cabbage", "radicchio"}
@@ -77,7 +78,7 @@ def build_analysis(context: MenuContext) -> AnalysisResponse:
     animal_based = infer_animal_ingredients(source_items)
 
     restaurant_name = derive_restaurant_name(context.filename, context.raw_text)
-    dishes = generate_dishes(cuisine_signals, available)
+    dishes = generate_dishes(cuisine_signals, available, source_items)
 
     return AnalysisResponse(
         restaurant_name=restaurant_name,
@@ -89,11 +90,15 @@ def build_analysis(context: MenuContext) -> AnalysisResponse:
             likely_missing=[],
         ),
         vegan_dishes=dishes,
-        notes=[],
+        notes=build_consumer_notes(animal_based),
     )
 
 
-def generate_dishes(cuisine_signals: list[str], available: list[str]) -> list[DishSuggestion]:
+def generate_dishes(
+    cuisine_signals: list[str],
+    available: list[str],
+    source_items: list[str],
+) -> list[DishSuggestion]:
     primary_cuisine = cuisine_signals[0] if cuisine_signals else "Contemporary Casual"
     cuisine_set = set(cuisine_signals)
 
@@ -119,14 +124,7 @@ def generate_dishes(cuisine_signals: list[str], available: list[str]) -> list[Di
     deduped = dedupe_candidates(candidates)
 
     return [
-        DishSuggestion(
-            name=dish.name,
-            category=dish.category,
-            feasibility=feasibility_for_score(dish.score),
-            reasoning=dish.reasoning,
-            ingredients_used=list(dish.ingredients_used),
-            ingredients_needed=[],
-        )
+        candidate_to_dish_suggestion(dish, source_items)
         for dish in deduped
     ]
 
@@ -559,6 +557,22 @@ def dedupe_candidates(candidates: list[CandidateDish]) -> list[CandidateDish]:
     return deduped
 
 
+def candidate_to_dish_suggestion(dish: CandidateDish, source_items: list[str]) -> DishSuggestion:
+    consumer_confidence = consumer_confidence_for_score(dish.score)
+
+    return DishSuggestion(
+        name=dish.name,
+        category=dish.category,
+        feasibility=feasibility_for_score(dish.score),
+        consumer_confidence=consumer_confidence,
+        reasoning=dish.reasoning,
+        ordering_tip=build_ordering_tip(dish.category, list(dish.ingredients_used), consumer_confidence),
+        evidence_lines=select_evidence_lines(list(dish.ingredients_used), source_items),
+        ingredients_used=list(dish.ingredients_used),
+        ingredients_needed=[],
+    )
+
+
 def make_candidate(
     *,
     name: str,
@@ -672,6 +686,77 @@ def feasibility_for_score(score: int) -> str:
     if score >= 72:
         return "Strong pantry fit"
     return "Possible now"
+
+
+def consumer_confidence_for_score(score: int) -> str:
+    if score >= 88:
+        return "Likely available now"
+    if score >= 72:
+        return "Likely available if you ask"
+    return "Worth asking about"
+
+
+def build_ordering_tip(category: str, ingredients_used: list[str], consumer_confidence: str) -> str:
+    ingredient_phrase = human_join(ingredients_used[:4])
+    order_shape = order_shape_for_category(category)
+
+    if consumer_confidence == "Likely available now":
+        return f'Ask: "Could you do {order_shape} with {ingredient_phrase}?"'
+    if consumer_confidence == "Likely available if you ask":
+        return (
+            f'Ask: "Could you do {order_shape} with {ingredient_phrase} '
+            'and keep it free of dairy, egg, and meat?"'
+        )
+    return (
+        f'Ask: "Is there any way to do {order_shape} with {ingredient_phrase} '
+        'using ingredients already on the menu?"'
+    )
+
+
+def order_shape_for_category(category: str) -> str:
+    shapes = {
+        "Shareables": "a vegan small plate",
+        "Salads": "a vegan salad",
+        "Bowls": "a vegan bowl",
+        "Mains": "a vegan entree",
+        "Tacos": "vegan tacos",
+        "Wraps": "a vegan wrap",
+        "Plates": "a vegan plate",
+        "Curries": "a vegan curry",
+        "Sandwiches": "a vegan sandwich",
+    }
+    return shapes.get(category, f"a vegan {singularize(category)}")
+
+
+def select_evidence_lines(ingredients_used: list[str], source_items: list[str], limit: int = 2) -> list[str]:
+    ranked_matches: list[tuple[int, int, str]] = []
+    for index, source_item in enumerate(source_items):
+        lowered = source_item.lower()
+        match_count = sum(1 for ingredient in ingredients_used if phrase_present(lowered, ingredient))
+        if match_count:
+            ranked_matches.append((match_count, index, source_item))
+
+    ranked_matches.sort(key=lambda item: (-item[0], item[1]))
+    return [source_item for _matches, _index, source_item in ranked_matches[:limit]]
+
+
+def build_consumer_notes(animal_based: list[str]) -> list[str]:
+    notes = [
+        "These suggestions are inferred from menu language, so treat them as smart asks rather than guaranteed listed items.",
+        "Mention the ingredients you saw on the menu when ordering. That makes an off-menu vegan ask feel much more realistic.",
+    ]
+
+    if animal_based:
+        highlighted = human_join(animal_based[:4])
+        notes.append(
+            f"Watch for animal-based finishes or sauces elsewhere on the menu, especially items like {highlighted}."
+        )
+    else:
+        notes.append(
+            "Even if a menu looks plant-forward, it is still worth confirming butter, cheese, aioli, stock, and shared prep."
+        )
+
+    return notes
 
 
 def ordered_present(available: list[str], options: set[str]) -> list[str]:

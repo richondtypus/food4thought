@@ -11,7 +11,10 @@ class DishSuggestion(BaseModel):
     name: str
     category: str
     feasibility: str
+    consumer_confidence: str
     reasoning: str
+    ordering_tip: str
+    evidence_lines: list[str]
     ingredients_used: list[str]
     ingredients_needed: list[str]
 

@@ -11,7 +11,10 @@ type DishSuggestion = {
   name: string;
   category: string;
   feasibility: string;
+  consumer_confidence: string;
   reasoning: string;
+  ordering_tip: string;
+  evidence_lines: string[];
   ingredients_used: string[];
 };
 
@@ -21,20 +24,142 @@ type AnalysisResponse = {
   source_items: string[];
   ingredients: IngredientGroup;
   vegan_dishes: DishSuggestion[];
+  notes: string[];
+};
+
+type SuggestionSection = {
+  confidence: string;
+  label: string;
+  heading: string;
+  note: string;
+};
+
+type ParsedEvidenceLine = {
+  title: string;
+  details: string | null;
+  price: string | null;
 };
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 
-function statusTone(feasibility: string): string {
-  if (feasibility === "Ready now") {
+const suggestionSections: SuggestionSection[] = [
+  {
+    confidence: "Likely available now",
+    label: "Best Bets",
+    heading: "Likely available now",
+    note: "These look closest to asks the kitchen could probably handle with the least friction.",
+  },
+  {
+    confidence: "Likely available if you ask",
+    label: "Askable Options",
+    heading: "Likely available if you ask",
+    note: "These suggestions still feel pantry-native, but they may need a clearer vegan request or a small adjustment.",
+  },
+  {
+    confidence: "Worth asking about",
+    label: "Stretch Asks",
+    heading: "Worth asking about",
+    note: "These are still grounded in the menu, but they feel more off-menu and should be treated as polite asks rather than expectations.",
+  },
+];
+
+function statusTone(consumerConfidence: string): string {
+  if (consumerConfidence === "Likely available now") {
     return "status-pill status-ready";
   }
 
-  if (feasibility === "Strong pantry fit") {
+  if (consumerConfidence === "Likely available if you ask") {
     return "status-pill status-strong";
   }
 
   return "status-pill status-possible";
+}
+
+function parseEvidenceLine(line: string): ParsedEvidenceLine {
+  const trimmed = line.trim();
+  const priceMatch = trimmed.match(/\s(\$?\d+(?:\.\d{1,2})?)$/);
+  const price = priceMatch ? formatEvidencePrice(priceMatch[1]) : null;
+  const withoutPrice = priceMatch
+    ? trimmed.slice(0, trimmed.length - priceMatch[0].length).trim()
+    : trimmed;
+
+  const tokens = withoutPrice.split(/\s+/);
+  const detailStart = findEvidenceDetailStart(tokens);
+  const titleTokens =
+    detailStart < tokens.length ? tokens.slice(0, detailStart) : tokens;
+  const detailTokens =
+    detailStart < tokens.length ? tokens.slice(detailStart) : [];
+
+  return {
+    title: prettifyEvidenceTitle(titleTokens.join(" ")),
+    details: detailTokens.length
+      ? prettifyEvidenceDetails(detailTokens.join(" "))
+      : null,
+    price,
+  };
+}
+
+function findEvidenceDetailStart(tokens: string[]): number {
+  let uppercaseLeadingCount = 0;
+
+  for (const token of tokens) {
+    if (/[a-z]/.test(token)) {
+      break;
+    }
+    uppercaseLeadingCount += 1;
+  }
+
+  if (uppercaseLeadingCount >= 2 && uppercaseLeadingCount < tokens.length) {
+    return uppercaseLeadingCount;
+  }
+
+  return tokens.length;
+}
+
+function prettifyEvidenceTitle(value: string): string {
+  if (!/[a-z]/.test(value) && /[A-Z]/.test(value)) {
+    return value.toLowerCase().replace(/\b[a-z]/g, (letter) => letter.toUpperCase());
+  }
+
+  return value;
+}
+
+function prettifyEvidenceDetails(value: string): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return normalized;
+  }
+
+  return normalized[0].toUpperCase() + normalized.slice(1);
+}
+
+function formatEvidencePrice(value: string): string {
+  const numeric = Number(value.replace("$", ""));
+  if (Number.isNaN(numeric)) {
+    return value.startsWith("$") ? value : `$${value}`;
+  }
+
+  if (Number.isInteger(numeric)) {
+    return `$${numeric.toFixed(0)}`;
+  }
+
+  return `$${numeric.toFixed(2)}`;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function lineIncludesPhrase(line: string, phrase: string): boolean {
+  const pattern = new RegExp(
+    `\\b${phrase.split(/\s+/).map(escapeRegExp).join("\\s+")}\\b`,
+    "i",
+  );
+  return pattern.test(line);
+}
+
+function findLineMatches(line: string, phrases: string[]): string[] {
+  return phrases.filter((phrase) => lineIncludesPhrase(line, phrase));
 }
 
 export default function Home() {
@@ -83,49 +208,58 @@ export default function Home() {
     }
   }
 
+  const likelyNowCount =
+    result?.vegan_dishes.filter((dish) => dish.consumer_confidence === "Likely available now")
+      .length ?? 0;
+  const askableCount =
+    result?.vegan_dishes.filter((dish) => dish.consumer_confidence !== "Likely available now")
+      .length ?? 0;
+  const watchoutCount = result?.ingredients.animal_based.length ?? 0;
+
   return (
     <main className="app-shell">
       <section className="hero-shell">
         <div className="hero-panel">
-          <div className="hero-ribbon">VC Demo • Pantry-native vegan menu engine</div>
-          <h1>Show every vegan dish a restaurant can already make.</h1>
+          <div className="hero-ribbon">Pantry-native vegan finder</div>
+          <h1>See what a restaurant can likely make vegan for you.</h1>
           <p className="hero-lede">
-            Upload a menu PDF and we infer the pantry already in play, then
-            generate the full vegan dish set the kitchen can plausibly run right
-            now. No fantasy SKUs. No blocker lists. Just what the restaurant
-            already has.
+            Upload a menu PDF and we uncover the vegan-friendly dishes hiding in
+            the kitchen&apos;s current pantry. The goal is not to invent fantasy
+            meals. It&apos;s to help vegans see what a restaurant can plausibly make
+            from ingredients already on the menu.
           </p>
 
           <div className="hero-metrics">
             <article className="hero-metric">
-              <strong>Pantry-native</strong>
-              <p>Generated from ingredients already signaled by the current menu.</p>
+              <strong>Hidden vegan menu</strong>
+              <p>We surface dishes the kitchen can likely assemble even if they are not listed as vegan.</p>
             </article>
             <article className="hero-metric">
-              <strong>Exhaustive mode</strong>
-              <p>We surface all viable vegan dishes our engine can infer, not just 2-3 ideas.</p>
+              <strong>Askable, not imaginary</strong>
+              <p>Every suggestion stays anchored to ingredients already signaled by the menu.</p>
             </article>
             <article className="hero-metric">
-              <strong>Boardroom-ready</strong>
-              <p>Structured for fast storytelling in founder meetings, demos, and conferences.</p>
+              <strong>Built for diners</strong>
+              <p>You get confidence signals, menu evidence, and language you can actually use when ordering.</p>
             </article>
           </div>
         </div>
 
         <form className="upload-panel" onSubmit={handleSubmit}>
           <div className="upload-top">
-            <p className="section-label">Menu Input</p>
-            <h2>Run a restaurant menu through investor-demo mode</h2>
+            <p className="section-label">Menu Check</p>
+            <h2>Upload a menu and uncover vegan options hiding in plain sight</h2>
             <p>
-              Best on text-based PDFs. We map the current menu, infer the pantry,
-              and return all viable vegan dishes grounded in existing ingredients.
+              Best on text-based PDFs. We read the current menu, infer the
+              ingredients already in play, and turn that into vegan-friendly
+              ordering guidance.
             </p>
           </div>
 
           <label className="dropzone" htmlFor="menu-upload">
             <span className="dropzone-title">Drop in a restaurant menu PDF</span>
             <span className="dropzone-subtitle">
-              PDF only • current pantry inferred from menu language
+              PDF only • pantry-native suggestions • diner-first output
             </span>
             <strong>{file?.name ?? "No file selected yet"}</strong>
           </label>
@@ -143,13 +277,13 @@ export default function Home() {
           />
 
           <button className="primary-button" disabled={isSubmitting} type="submit">
-            {isSubmitting ? "Generating vegan menu..." : "Generate vegan menu"}
+            {isSubmitting ? "Checking the menu..." : "Find vegan-friendly options"}
           </button>
 
           <div className="assumption-row">
-            <span className="info-chip">No new ingredients assumed</span>
-            <span className="info-chip">Uses current menu language</span>
-            <span className="info-chip">Returns all viable dish concepts</span>
+            <span className="info-chip">Pantry-native suggestions</span>
+            <span className="info-chip">Consumer-first guidance</span>
+            <span className="info-chip">Built from actual menu ingredients</span>
           </div>
 
           {error ? <p className="error-banner">{error}</p> : null}
@@ -160,16 +294,18 @@ export default function Home() {
         <section className="results-shell">
           <section className="briefing-card">
             <div className="briefing-copy">
-              <p className="section-label">Pantry-native Output</p>
+              <p className="section-label">Hidden Vegan Menu</p>
               <h2>{result.restaurant_name}</h2>
               <p className="briefing-lede">
-                We found {result.vegan_dishes.length} vegan dishes this kitchen can
-                plausibly run from ingredients already signaled on the menu.
+                Based on the ingredients already signaled on this menu, here are{" "}
+                {result.vegan_dishes.length} vegan-friendly orders worth trying.
+                Think of these as the restaurant&apos;s hidden vegan menu, not just a
+                brainstorm.
               </p>
             </div>
 
             <div className="briefing-tags">
-              <span className="info-chip info-chip-strong">No new ingredients assumed</span>
+              <span className="info-chip info-chip-strong">Pantry-native suggestions</span>
               {result.cuisine_signals.map((signal) => (
                 <span className="info-chip" key={signal}>
                   {signal}
@@ -180,79 +316,204 @@ export default function Home() {
 
           <div className="metrics-grid">
             <article className="metric-card">
-              <span>Potential vegan dishes</span>
-              <strong>{result.vegan_dishes.length}</strong>
-              <p>All viable concepts inferred from the current pantry model.</p>
+              <span>Best bets</span>
+              <strong>{likelyNowCount}</strong>
+              <p>Suggestions that feel closest to a low-friction vegan ask right now.</p>
             </article>
             <article className="metric-card">
-              <span>Pantry ingredients detected</span>
-              <strong>{result.ingredients.available.length}</strong>
-              <p>Signals we believe are already in the kitchen or on the line.</p>
+              <span>Ask-worthy options</span>
+              <strong>{askableCount}</strong>
+              <p>Ideas that may still work if you mention the ingredients already on the menu.</p>
             </article>
             <article className="metric-card">
-              <span>Menu lines analyzed</span>
-              <strong>{result.source_items.length}</strong>
-              <p>Dish lines and menu text pulled directly from the restaurant PDF.</p>
+              <span>Animal-based watchouts</span>
+              <strong>{watchoutCount}</strong>
+              <p>Ingredients on the menu that may show up in sauces, finishes, or substitutions.</p>
             </article>
           </div>
 
-          <section className="content-card">
-            <div className="section-heading">
-              <div>
-                <p className="section-label">Possible Vegan Menu</p>
-                <h3>All viable dishes inferred from the restaurant&apos;s current pantry</h3>
+          <div className="support-grid">
+            <section className="content-card compact-card">
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="section-label">How To Use This</p>
+                  <h3>Order like a vegan regular, not like you are improvising</h3>
+                </div>
+                <p className="section-note">
+                  The strongest asks mention ingredients the restaurant already uses.
+                </p>
               </div>
-              <p className="section-note">
-                Every card below is built from ingredients already detected on the
-                menu. No gap-fillers, no made-up pantry.
-              </p>
-            </div>
 
-            <div className="dish-grid">
-              {result.vegan_dishes.map((dish, index) => (
-                <article className="dish-card" key={`${dish.name}-${index}`}>
-                  <div className="dish-topline">
-                    <span className="dish-index">{String(index + 1).padStart(2, "0")}</span>
-                    <span className={statusTone(dish.feasibility)}>{dish.feasibility}</span>
-                  </div>
+              <ul className="note-list">
+                {result.notes.map((note) => (
+                  <li key={note}>{note}</li>
+                ))}
+              </ul>
+            </section>
 
-                  <div className="dish-heading">
-                    <p className="dish-category">{dish.category}</p>
-                    <h4>{dish.name}</h4>
-                  </div>
+            <section className="content-card compact-card">
+              <div className="section-heading compact-heading">
+                <div>
+                  <p className="section-label">Watchouts</p>
+                  <h3>Ingredients worth double-checking before you order</h3>
+                </div>
+                <p className="section-note">
+                  Menus often hide non-vegan finishes in sauces, dressings, or prep.
+                </p>
+              </div>
 
-                  <p className="dish-reasoning">{dish.reasoning}</p>
-
+              {result.ingredients.animal_based.length ? (
+                <>
                   <div className="ingredient-stack">
-                    {dish.ingredients_used.map((ingredient) => (
-                      <span className="ingredient-pill" key={`${dish.name}-${ingredient}`}>
+                    {result.ingredients.animal_based.map((ingredient) => (
+                      <span className="ingredient-pill ingredient-pill-strong" key={ingredient}>
                         {ingredient}
                       </span>
                     ))}
                   </div>
-                </article>
-              ))}
-            </div>
-          </section>
+                  <p className="support-copy">
+                    These ingredients appeared on the menu, so it is worth
+                    checking whether they show up in sauces, aiolis, dressings,
+                    shared prep, or default add-ons.
+                  </p>
+                </>
+              ) : (
+                <p className="support-copy">
+                  No obvious animal-based ingredients were flagged in the parsed
+                  text, but it is still smart to confirm butter, cheese, stock,
+                  and shared prep before treating anything as fully vegan.
+                </p>
+              )}
+            </section>
+          </div>
 
+          {suggestionSections.map((section) => {
+            const dishes = result.vegan_dishes.filter(
+              (dish) => dish.consumer_confidence === section.confidence,
+            );
+
+            if (!dishes.length) {
+              return null;
+            }
+
+            return (
+              <section className="content-card" key={section.confidence}>
+                <div className="section-heading">
+                  <div>
+                    <p className="section-label">{section.label}</p>
+                    <h3>{section.heading}</h3>
+                  </div>
+                  <p className="section-note">{section.note}</p>
+                </div>
+
+                <div className="dish-grid">
+                  {dishes.map((dish, index) => (
+                    <article className="dish-card" key={`${dish.name}-${index}`}>
+                      <div className="dish-topline">
+                        <span className="dish-category">{dish.category}</span>
+                        <span className={statusTone(dish.consumer_confidence)}>
+                          {dish.consumer_confidence}
+                        </span>
+                      </div>
+
+                      <div className="dish-heading">
+                        <h4>{dish.name}</h4>
+                      </div>
+
+                      <p className="dish-reasoning">{dish.reasoning}</p>
+
+                      {dish.evidence_lines.length ? (
+                        <div className="evidence-block">
+                          <span className="evidence-label">Why we think this could work</span>
+                          <ul className="evidence-list">
+                            {dish.evidence_lines.map((line) => {
+                              const parsed = parseEvidenceLine(line);
+                              const matchedIngredients = findLineMatches(
+                                line,
+                                dish.ingredients_used,
+                              );
+                              const lineWatchouts = findLineMatches(
+                                line,
+                                result.ingredients.animal_based,
+                              );
+
+                              return (
+                                <li className="evidence-item" key={`${dish.name}-${line}`}>
+                                  <div className="evidence-item-top">
+                                    <h5 className="evidence-title">{parsed.title}</h5>
+                                    {parsed.price ? (
+                                      <span className="evidence-price">{parsed.price}</span>
+                                    ) : null}
+                                  </div>
+
+                                  {parsed.details ? (
+                                    <p className="evidence-details">{parsed.details}</p>
+                                  ) : null}
+
+                                  {matchedIngredients.length || lineWatchouts.length ? (
+                                    <div className="evidence-tags">
+                                      {matchedIngredients.map((ingredient) => (
+                                        <span
+                                          className="evidence-chip evidence-chip-match"
+                                          key={`${line}-${ingredient}`}
+                                        >
+                                          Supports {ingredient}
+                                        </span>
+                                      ))}
+
+                                      {lineWatchouts.map((ingredient) => (
+                                        <span
+                                          className="evidence-chip evidence-chip-watchout"
+                                          key={`${line}-watchout-${ingredient}`}
+                                        >
+                                          Watchout {ingredient}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ) : null}
+
+                      <div className="ordering-callout">
+                        <span className="ordering-label">What to ask for</span>
+                        <p>{dish.ordering_tip}</p>
+                      </div>
+
+                      <div className="ingredient-stack">
+                        {dish.ingredients_used.map((ingredient) => (
+                          <span className="ingredient-pill" key={`${dish.name}-${ingredient}`}>
+                            {ingredient}
+                          </span>
+                        ))}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            );
+          })}
         </section>
       ) : (
         <section className="preview-shell">
           <article className="preview-card">
-            <p className="section-label">What The Demo Returns</p>
-            <h2>A launchable vegan menu map, not a generic brainstorm.</h2>
+            <p className="section-label">What You Get</p>
+            <h2>A vegan ordering guide built from the menu the restaurant already has.</h2>
             <div className="preview-grid">
               <div className="preview-panel">
-                <strong>Current pantry model</strong>
-                <p>We infer ingredients already on the line from menu language and dish formats.</p>
+                <strong>Likely available now</strong>
+                <p>Best bets that feel closest to something the kitchen can already do for a vegan diner.</p>
               </div>
               <div className="preview-panel">
-                <strong>All viable vegan dishes</strong>
-                <p>We return the full set of vegan dishes the kitchen can plausibly execute right now.</p>
+                <strong>Likely if you ask</strong>
+                <p>Suggestions anchored to current ingredients, plus language you can use when ordering.</p>
               </div>
               <div className="preview-panel">
-                <strong>Clean operator story</strong>
-                <p>The output is built for quick explanation in meetings, not just internal analysis.</p>
+                <strong>Menu watchouts</strong>
+                <p>Animal-based ingredients flagged from the menu so you know where extra caution matters.</p>
               </div>
             </div>
           </article>
