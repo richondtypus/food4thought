@@ -32,21 +32,3 @@ poetry install
 poetry run uvicorn app.main:app --reload
 ```
 
-## Environment Variables
-
-### Frontend: `frontend/.env.local`
-
-```bash
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-```
-
-### Backend: `backend/.env`
-
-```bash
-OPENAI_API_KEY=
-SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
-```
-
