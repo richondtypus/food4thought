@@ -50,4 +50,3 @@ SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 ```
 
-The backend works without the OpenAI key by using deterministic heuristics. Supabase is optional in this scaffold.
